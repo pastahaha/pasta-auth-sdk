@@ -7,13 +7,14 @@ import uuid
 import requests
 from urllib.parse import urlencode
 from jose import jwt
+from dotenv import load_dotenv
+load_dotenv(override=True)
 
 class MCPOAuthSDK:
     def __init__(self):
-        self.google_client_id = "833970626725-n9aku2mjrgtvkr5vqvhhomvmu4pjbp1o.apps.googleusercontent.com"
-        self.google_client_secret = "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"
-        self.redirect_uri = "https://remote-mcp-kady.onrender.com/oauth/callback"
-
+        self.google_client_id = str(os.getenv("CLIENT_ID"))
+        self.google_client_secret = str(os.getenv("CLIENT_SECRET"))
+        self.redirect_uri = str(os.getenv("CLIENT_URI"))
         # Discovery
         self.google_discovery_url = "https://accounts.google.com/.well-known/openid-configuration"
         self.jwks = None
