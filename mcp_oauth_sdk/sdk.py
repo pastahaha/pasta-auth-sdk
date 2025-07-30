@@ -2,23 +2,24 @@
 
 import os
 import time
-import functools
 import uuid
+import functools
 import requests
 from urllib.parse import urlencode
 from jose import jwt
-from dotenv import load_dotenv
-load_dotenv(override=True)
+
 
 class MCPOAuthSDK:
     def __init__(self):
-        self.google_client_id = str(os.getenv("CLIENT_ID"))
-        self.google_client_secret = str(os.getenv("CLIENT_SECRET"))
-        self.redirect_uri = str(os.getenv("CLIENT_URI"))
-        # Discovery
+        self.google_client_id = os.environ.get("GOOGLE_CLIENT_ID")
+        self.google_client_secret = os.environ.get("GOOGLE_CLIENT_SECRET")
+        self.redirect_uri = os.environ.get("GOOGLE_REDIRECT_URI")  # e.g., https://yourdomain.com/oauth/callback
+
         self.google_discovery_url = "https://accounts.google.com/.well-known/openid-configuration"
         self.jwks = None
-        self.session_store = {}  # {session_id: {"id_token":..., "expires_at":...}}
+
+        self.protected_tools = []  # list of tool functions
+        self.session_store = {}    # session_id -> {expires_at: float}
 
     def _get_google_config(self):
         return requests.get(self.google_discovery_url).json()
@@ -46,7 +47,7 @@ class MCPOAuthSDK:
 
     def start_auth_flow(self):
         """
-        Returns Google OAuth 2.0 authorization URL.
+        Returns Google OAuth 2.0 login URL.
         """
         config = self._get_google_config()
         auth_endpoint = config["authorization_endpoint"]
@@ -61,12 +62,11 @@ class MCPOAuthSDK:
             "access_type": "offline",
             "prompt": "consent"
         }
-        url = f"{auth_endpoint}?{urlencode(params)}"
-        return url
+        return f"{auth_endpoint}?{urlencode(params)}"
 
     def complete_auth_flow(self, code):
         """
-        Exchange code for tokens and create a session.
+        Exchange code for tokens, create session.
         """
         config = self._get_google_config()
         token_endpoint = config["token_endpoint"]
@@ -81,20 +81,22 @@ class MCPOAuthSDK:
 
         resp = requests.post(token_endpoint, data=data)
         tokens = resp.json()
-
         id_token = tokens.get("id_token")
         if not id_token:
+            print("[OAuth] No id_token received")
             return None
 
         payload = self._verify_id_token(id_token)
         if not payload:
             return None
 
+        # Create session
         session_id = str(uuid.uuid4())
         self.session_store[session_id] = {
             "id_token": id_token,
-            "expires_at": time.time() + 1800  # 30 min
+            "expires_at": time.time() + 1800  # 30 min session
         }
+        print(f"[OAuth] New session created: {session_id}")
         return session_id
 
     def end_auth_flow(self, session_id):
@@ -102,12 +104,9 @@ class MCPOAuthSDK:
         Invalidate session.
         """
         self.session_store.pop(session_id, None)
-        return True
+        print(f"[OAuth] Session ended: {session_id}")
 
-    def _is_session_valid(self, session_id):
-        """
-        Check session expiry.
-        """
+    def is_session_valid(self, session_id):
         session = self.session_store.get(session_id)
         if not session:
             return False
@@ -118,15 +117,18 @@ class MCPOAuthSDK:
 
     def protect_tool(self, tool_func):
         """
-        Decorator to protect MCP tools.
-        Requires header: X-Session-ID: <session_id>
+        Instead of registering now, keep it aside.
         """
-        @functools.wraps(tool_func)
-        def wrapper(*args, **kwargs):
-            from mcp.server.fastmcp import get_current_request
-            req = get_current_request()
-            session_id = req.headers.get("X-Session-ID")
-            if not session_id or not self._is_session_valid(session_id):
-                return {"error": "Unauthorized: start OAuth flow first."}
-            return tool_func(*args, **kwargs)
-        return wrapper
+        self.protected_tools.append(tool_func)
+        return tool_func
+
+    def activate_protected_tools(self, mcp, session_id):
+        """
+        Register protected tools to MCP when session is valid.
+        """
+        if self.is_session_valid(session_id):
+            for tool in self.protected_tools:
+                mcp.add_tool(tool)
+            print("[OAuth] Protected tools activated")
+        else:
+            print("[OAuth] Invalid session; cannot activate tools")
