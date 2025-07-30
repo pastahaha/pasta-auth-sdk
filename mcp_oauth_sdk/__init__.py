@@ -1,1 +1,1 @@
-from .sdk import MCPOAuthSDK
+from .oauth import MCPOAuthSDK
